@@ -5,7 +5,7 @@ set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 cd "$DIR"
-/usr/local/go/bin/go build -o cheat .
+go build -o cheat .
 
 mkdir -p ~/.local/bin
 cp "$DIR/cheat" ~/.local/bin/cheat
