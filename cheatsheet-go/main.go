@@ -146,6 +146,95 @@ var categories = []category{
 		{"Ctrl+Shift+Space", "Enter vi mode"},
 		{"Ctrl+D", "Close pane / exit"},
 	}},
+	{"General", "Lazygit", []entry{
+		{"q", "Quit"},
+		{"x", "Open menu"},
+		{"?", "Open keybindings menu"},
+		{"↑/↓ or k/j", "Navigate"},
+		{"Enter", "Focus / toggle"},
+		{"[/]", "Switch tabs"},
+		{"1-5", "Switch panels"},
+		{"/", "Search current view"},
+		{"Esc", "Cancel / go back"},
+		{"+", "Next screen mode (normal/half/full)"},
+		{"_", "Previous screen mode"},
+	}},
+	{"Files", "Lazygit", []entry{
+		{"Space", "Toggle staged"},
+		{"a", "Stage/unstage all"},
+		{"c", "Commit changes"},
+		{"A", "Amend last commit"},
+		{"C", "Commit with editor"},
+		{"S", "Stash changes"},
+		{"e", "Edit file"},
+		{"o", "Open file"},
+		{"d", "Discard changes"},
+		{"D", "Reset options (soft/mixed/hard)"},
+		{"i", "Ignore file (.gitignore)"},
+	}},
+	{"Branches", "Lazygit", []entry{
+		{"Space", "Checkout branch"},
+		{"n", "New branch"},
+		{"d", "Delete branch"},
+		{"r", "Rebase onto checked-out branch"},
+		{"R", "Rename branch"},
+		{"M", "Merge into checked-out branch"},
+		{"f", "Fast-forward branch"},
+		{"g", "Reset options"},
+	}},
+	{"Commits", "Lazygit", []entry{
+		{"s", "Squash down"},
+		{"f", "Fixup commit"},
+		{"r", "Reword commit message"},
+		{"d", "Drop commit"},
+		{"e", "Edit commit"},
+		{"p", "Pick commit (when rebasing)"},
+		{"c", "Copy commit (cherry-pick)"},
+		{"v", "Paste commits (cherry-pick)"},
+		{"A", "Amend commit with staged changes"},
+		{"t", "Tag commit"},
+		{"T", "Create annotated tag"},
+	}},
+	{"Stash", "Lazygit", []entry{
+		{"Space", "Apply stash"},
+		{"g", "Pop stash"},
+		{"d", "Drop stash"},
+		{"n", "New branch from stash"},
+		{"r", "Rename stash"},
+	}},
+	{"General", "Lazydocker", []entry{
+		{"q", "Quit"},
+		{"x", "Open menu"},
+		{"[/]", "Switch tabs"},
+		{"↑/↓ or k/j", "Navigate"},
+		{"Enter", "Focus / toggle"},
+		{"/", "Filter"},
+		{"Esc", "Cancel / go back"},
+		{"m", "View logs"},
+		{"e", "Exec shell in container"},
+		{"+", "Next screen mode"},
+		{"_", "Previous screen mode"},
+	}},
+	{"Containers", "Lazydocker", []entry{
+		{"d", "Remove container"},
+		{"s", "Stop container"},
+		{"r", "Restart container"},
+		{"a", "Attach to container"},
+		{"E", "Exec shell"},
+		{"m", "View logs"},
+		{"c", "Run custom command"},
+		{"b", "Bulk actions"},
+	}},
+	{"Images", "Lazydocker", []entry{
+		{"d", "Remove image"},
+		{"D", "Remove image (with force)"},
+		{"b", "Bulk actions"},
+	}},
+	{"Volumes", "Lazydocker", []entry{
+		{"d", "Remove volume"},
+		{"D", "Remove volume (force)"},
+		{"b", "Bulk actions"},
+	}},
 }
 
 // ── Model ────────────────────────────────────────────────────────────
@@ -155,18 +244,75 @@ type focus int
 const (
 	focusList focus = iota
 	focusTable
+	focusSearch
 )
 
 type model struct {
 	focus       focus
+	prevFocus   focus
 	cursor      int
 	tableCursor int
 	width       int
 	height      int
+	searchQuery string
+	filtered    []int // indices into categories
 }
 
 func initialModel() model {
-	return model{focus: focusList, cursor: 0, tableCursor: 0}
+	m := model{focus: focusList, cursor: 0, tableCursor: 0}
+	m.filtered = allIndices()
+	return m
+}
+
+func allIndices() []int {
+	idx := make([]int, len(categories))
+	for i := range categories {
+		idx[i] = i
+	}
+	return idx
+}
+
+func filterCategories(query string) []int {
+	if query == "" {
+		return allIndices()
+	}
+	q := strings.ToLower(query)
+	var result []int
+	for i, cat := range categories {
+		if strings.Contains(strings.ToLower(cat.name), q) ||
+			strings.Contains(strings.ToLower(cat.section), q) {
+			result = append(result, i)
+			continue
+		}
+		for _, e := range cat.entries {
+			if strings.Contains(strings.ToLower(e.key), q) ||
+				strings.Contains(strings.ToLower(e.desc), q) {
+				result = append(result, i)
+				break
+			}
+		}
+	}
+	return result
+}
+
+func filteredEntries(cat category, query string) []entry {
+	if query == "" {
+		return cat.entries
+	}
+	q := strings.ToLower(query)
+	// if category name/section matches, show all entries
+	if strings.Contains(strings.ToLower(cat.name), q) ||
+		strings.Contains(strings.ToLower(cat.section), q) {
+		return cat.entries
+	}
+	var result []entry
+	for _, e := range cat.entries {
+		if strings.Contains(strings.ToLower(e.key), q) ||
+			strings.Contains(strings.ToLower(e.desc), q) {
+			result = append(result, e)
+		}
+	}
+	return result
 }
 
 func (m model) Init() tea.Cmd { return nil }
@@ -180,18 +326,50 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 	case tea.KeyMsg:
+		// search mode input
+		if m.focus == focusSearch {
+			switch msg.String() {
+			case "ctrl+c":
+				return m, tea.Quit
+			case "esc":
+				m.focus = m.prevFocus
+			case "enter":
+				m.focus = focusList
+			case "backspace":
+				if len(m.searchQuery) > 0 {
+					m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
+					m.filtered = filterCategories(m.searchQuery)
+					m.cursor = 0
+					m.tableCursor = 0
+				}
+			default:
+				if len(msg.String()) == 1 || msg.String() == " " {
+					m.searchQuery += msg.String()
+					m.filtered = filterCategories(m.searchQuery)
+					m.cursor = 0
+					m.tableCursor = 0
+				}
+			}
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 
+		case "/":
+			m.prevFocus = m.focus
+			m.focus = focusSearch
+
 		case "j", "down":
 			if m.focus == focusList {
-				if m.cursor < len(categories)-1 {
+				if m.cursor < len(m.filtered)-1 {
 					m.cursor++
 				}
 				m.tableCursor = 0
 			} else {
-				entries := categories[m.cursor].entries
+				cat := categories[m.filtered[m.cursor]]
+				entries := filteredEntries(cat, m.searchQuery)
 				if m.tableCursor < len(entries)-1 {
 					m.tableCursor++
 				}
@@ -210,7 +388,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "l", "right", "enter":
-			if m.focus == focusList {
+			if m.focus == focusList && len(m.filtered) > 0 {
 				m.focus = focusTable
 				m.tableCursor = 0
 			}
@@ -218,6 +396,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "h", "left", "esc":
 			if m.focus == focusTable {
 				m.focus = focusList
+			} else if m.focus == focusList && m.searchQuery != "" {
+				m.searchQuery = ""
+				m.filtered = allIndices()
+				m.cursor = 0
+				m.tableCursor = 0
 			}
 		}
 	}
@@ -240,8 +423,10 @@ func (m model) View() string {
 
 	// ── Left panel ──────────────────────────────────
 	var listItems []string
+	cursorLine := 0
 	lastSection := ""
-	for i, cat := range categories {
+	for idx, catIdx := range m.filtered {
+		cat := categories[catIdx]
 		if cat.section != lastSection {
 			if lastSection != "" {
 				listItems = append(listItems, "")
@@ -254,15 +439,35 @@ func (m model) View() string {
 			lastSection = cat.section
 		}
 
+		if idx == m.cursor {
+			cursorLine = len(listItems)
+		}
+
 		name := "  " + cat.name
 		style := lipgloss.NewStyle().Foreground(blue)
-		if i == m.cursor {
+		if idx == m.cursor {
 			style = lipgloss.NewStyle().Foreground(mauve).Bold(true)
 		}
 		listItems = append(listItems, style.Render(name))
 	}
 
-	listContent := strings.Join(listItems, "\n")
+	// scroll so cursor stays visible
+	scrollOff := 0
+	if cursorLine >= contentH {
+		scrollOff = cursorLine - contentH + 2
+	}
+	if scrollOff > len(listItems)-contentH {
+		scrollOff = len(listItems) - contentH
+	}
+	if scrollOff < 0 {
+		scrollOff = 0
+	}
+	visibleItems := listItems
+	if scrollOff < len(listItems) {
+		visibleItems = listItems[scrollOff:]
+	}
+
+	listContent := strings.Join(visibleItems, "\n")
 
 	leftBorderColor := surface1
 	leftTitleColor := overlay0
@@ -274,32 +479,49 @@ func (m model) View() string {
 	leftPanel := renderPanel("categories", listContent, sideW, contentH, leftBorderColor, leftTitleColor)
 
 	// ── Right panel ─────────────────────────────────
-	cat := categories[m.cursor]
 	keyW := 22
-
 	var rows []string
-	// header
-	hdrKey := lipgloss.NewStyle().
-		Width(keyW).
-		Foreground(lavender).
-		Bold(true).
-		Render("Shortcut")
-	hdrDesc := lipgloss.NewStyle().
-		Foreground(lavender).
-		Bold(true).
-		Render("Description")
-	rows = append(rows, hdrKey+hdrDesc)
 
-	for i, e := range cat.entries {
-		keyStyle := lipgloss.NewStyle().Width(keyW).Foreground(blue)
-		descStyle := lipgloss.NewStyle().Foreground(subtext1)
+	if len(m.filtered) > 0 {
+		cat := categories[m.filtered[m.cursor]]
+		entries := filteredEntries(cat, m.searchQuery)
 
-		if m.focus == focusTable && i == m.tableCursor {
-			keyStyle = keyStyle.Foreground(mauve).Bold(true)
-			descStyle = descStyle.Foreground(text).Bold(true)
+		// header
+		hdrKey := lipgloss.NewStyle().
+			Width(keyW).
+			Foreground(lavender).
+			Bold(true).
+			Render("Shortcut")
+		hdrDesc := lipgloss.NewStyle().
+			Foreground(lavender).
+			Bold(true).
+			Render("Description")
+		rows = append(rows, hdrKey+hdrDesc)
+
+		// scroll right panel so tableCursor stays visible
+		tableScrollOff := 0
+		if m.tableCursor >= contentH-1 { // -1 for header row
+			tableScrollOff = m.tableCursor - contentH + 2
+		}
+		if tableScrollOff > len(entries)-(contentH-1) {
+			tableScrollOff = len(entries) - (contentH - 1)
+		}
+		if tableScrollOff < 0 {
+			tableScrollOff = 0
 		}
 
-		rows = append(rows, keyStyle.Render(e.key)+descStyle.Render(e.desc))
+		for i := tableScrollOff; i < len(entries); i++ {
+			e := entries[i]
+			keyStyle := lipgloss.NewStyle().Width(keyW).Foreground(blue)
+			descStyle := lipgloss.NewStyle().Foreground(subtext1)
+
+			if m.focus == focusTable && i == m.tableCursor {
+				keyStyle = keyStyle.Foreground(mauve).Bold(true)
+				descStyle = descStyle.Foreground(text).Bold(true)
+			}
+
+			rows = append(rows, keyStyle.Render(e.key)+descStyle.Render(e.desc))
+		}
 	}
 
 	tableContent := strings.Join(rows, "\n")
@@ -311,7 +533,12 @@ func (m model) View() string {
 		rightTitleColor = mauve
 	}
 
-	rightPanel := renderPanel(cat.name, tableContent, rightW, contentH, rightBorderColor, rightTitleColor)
+	rightTitle := "shortcuts"
+	if len(m.filtered) > 0 {
+		rightTitle = categories[m.filtered[m.cursor]].name
+	}
+
+	rightPanel := renderPanel(rightTitle, tableContent, rightW, contentH, rightBorderColor, rightTitleColor)
 
 	// ── Title bar ───────────────────────────────────
 	title := lipgloss.NewStyle().
@@ -322,18 +549,28 @@ func (m model) View() string {
 				lipgloss.NewStyle().Foreground(overlay0).Render("  Catppuccin Frappé"))
 
 	// ── Footer ──────────────────────────────────────
-	footerParts := []string{
-		renderKey("q", "quit"),
-		renderKey("j/k", "navigate"),
-		renderKey("h/l", "switch panel"),
-		renderKey("enter", "select"),
-		renderKey("/", "search"),
-		renderKey("esc", "back"),
+	var footer string
+	if m.focus == focusSearch {
+		searchLabel := lipgloss.NewStyle().Foreground(mauve).Bold(true).Render(" / ")
+		searchText := lipgloss.NewStyle().Foreground(text).Render(m.searchQuery)
+		cursor := lipgloss.NewStyle().Foreground(mauve).Render("█")
+		footer = lipgloss.NewStyle().
+			Width(m.width).
+			Render(searchLabel + searchText + cursor)
+	} else {
+		footerParts := []string{
+			renderKey("q", "quit"),
+			renderKey("j/k", "navigate"),
+			renderKey("h/l", "switch panel"),
+			renderKey("enter", "select"),
+			renderKey("/", "search"),
+			renderKey("esc", "back"),
+		}
+		footer = lipgloss.NewStyle().
+			Width(m.width).
+			Foreground(subtext0).
+			Render(" " + strings.Join(footerParts, "  "))
 	}
-	footer := lipgloss.NewStyle().
-		Width(m.width).
-		Foreground(subtext0).
-		Render(" " + strings.Join(footerParts, "  "))
 
 	// ── Compose ─────────────────────────────────────
 	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, " ", rightPanel)
